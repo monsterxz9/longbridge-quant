@@ -1,0 +1,17 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# 本地数据缓存（K线 / 市值快照）
+.cache/
+conversation-*
+
+# 环境变量文件（密钥等）
+.env
