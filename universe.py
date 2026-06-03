@@ -10,10 +10,9 @@
 
 from __future__ import annotations
 
-from longbridge.openapi import QuoteContext
-
 from cache import get_large_caps_cached
 from lb_config import LARGE_CAP_THRESHOLD
+from longbridge_cli import LongbridgeCLI
 
 # NYSE 上市的科技相关股票白名单（不在 NASDAQ 但属于科技板块）
 # 增删这里以补充被 NASD 过滤规则漏掉的科技股
@@ -36,26 +35,26 @@ NYSE_TECH_WHITELIST: list[str] = [
 
 
 def all_largecap_universe(
-    ctx: QuoteContext, min_market_cap: float = LARGE_CAP_THRESHOLD
+    client: LongbridgeCLI, min_market_cap: float = LARGE_CAP_THRESHOLD
 ) -> list[str]:
     """所有市值 >= min_market_cap 的美股列表，按市值降序。"""
-    df = get_large_caps_cached(ctx, threshold=min_market_cap)
+    df = get_large_caps_cached(client, threshold=min_market_cap)
     return df["symbol"].tolist()
 
 
 def nasdaq_largecap_universe(
-    ctx: QuoteContext, min_market_cap: float = LARGE_CAP_THRESHOLD
+    client: LongbridgeCLI, min_market_cap: float = LARGE_CAP_THRESHOLD
 ) -> list[str]:
     """NASD 交易所的大盘股列表。"""
-    df = get_large_caps_cached(ctx, threshold=min_market_cap)
+    df = get_large_caps_cached(client, threshold=min_market_cap)
     return df[df["exchange"] == "NASD"]["symbol"].tolist()
 
 
 def tech_largecap_universe(
-    ctx: QuoteContext, min_market_cap: float = LARGE_CAP_THRESHOLD
+    client: LongbridgeCLI, min_market_cap: float = LARGE_CAP_THRESHOLD
 ) -> list[str]:
     """科技大盘股池 = NASD 大盘股 + NYSE 科技白名单（去重）。"""
-    df = get_large_caps_cached(ctx, threshold=min_market_cap)
+    df = get_large_caps_cached(client, threshold=min_market_cap)
     nasd = df[df["exchange"] == "NASD"]["symbol"].tolist()
 
     # 只保留在大盘股池中仍满足阈值的白名单股票

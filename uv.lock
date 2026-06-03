@@ -8,32 +8,16 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "longbridge"
-version = "4.0.5"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/84/2e/7e1099e32f304749b1f4f9fcc08c7082b53e38d1d8b16c0d2991d4f58b4c/longbridge-4.0.5-cp314-cp314-macosx_10_12_x86_64.whl", hash = "sha256:c1cef01a316bd5ee807236e8a698136f277a5db52b88ba3f722dbe15c371c225", size = 7287488, upload-time = "2026-03-23T10:23:13.573Z" },
-    { url = "https://files.pythonhosted.org/packages/f7/c5/92100c84213cbd19dde93a574e1659fc42f932a1cb95a0fa4457c790fd8a/longbridge-4.0.5-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:c34816f3c683c6d11521ef632b8036657523f93a1f74c639b9238b522791a80b", size = 6989523, upload-time = "2026-03-23T10:23:15.088Z" },
-    { url = "https://files.pythonhosted.org/packages/5f/b6/1a3b7fda58028feb5d18c3c12878ee4a912eb79046c3ca1c855bbf55dd8d/longbridge-4.0.5-cp314-cp314-manylinux_2_39_aarch64.whl", hash = "sha256:f8b48ba6ab4dc1d16031f9de6cfead902664ae6e436d2ca36e4a2e697869c9fb", size = 7340163, upload-time = "2026-03-23T10:23:16.653Z" },
-    { url = "https://files.pythonhosted.org/packages/04/79/054a436b9d777f084b6ea05096e6baf4bc37f70f3ed149bf5451197796a7/longbridge-4.0.5-cp314-cp314-manylinux_2_39_x86_64.whl", hash = "sha256:9315b9c37039d026729bf75d01d8c0d23c6f4dcbbdc4753f07b8313ed6bebbf6", size = 7421366, upload-time = "2026-03-23T10:23:18.492Z" },
-    { url = "https://files.pythonhosted.org/packages/58/7b/34459098a2905e3669581a373165c94eeb89f7134bf2b4e807a35752627a/longbridge-4.0.5-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:31c2a867619f4bd7ca1c618aa78b1d15ab98e57a265fbb9cc9c72dd82628f842", size = 7503545, upload-time = "2026-03-23T10:23:20.111Z" },
-    { url = "https://files.pythonhosted.org/packages/2a/35/25a84668238ea5a45bac9469fa025c7d4e4248b61a160c68719d194e78ec/longbridge-4.0.5-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:a265eb21bd57cc661683141d5c8747775976728fac0d89c40906ea826d87a4a9", size = 7669851, upload-time = "2026-03-23T10:23:22.087Z" },
-    { url = "https://files.pythonhosted.org/packages/70/a2/2d3b176d57c2c32c4f4d188d0b97b08d055f4585f6a3285429d4b1c31f44/longbridge-4.0.5-cp314-cp314-win_amd64.whl", hash = "sha256:8af18f6fa0c97d24a52933cf39b44b5052c2f52496f9b2a92825073492db96a0", size = 7358895, upload-time = "2026-03-23T10:23:27.576Z" },
-]
-
-[[package]]
 name = "longbridge-quant"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "longbridge" },
     { name = "pandas" },
     { name = "pyarrow" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "longbridge", specifier = ">=4.0.5" },
     { name = "pandas", specifier = ">=3.0.2" },
     { name = "pyarrow", specifier = ">=17.0.0" },
 ]

@@ -3,24 +3,24 @@
 用法示例:
 
     # 默认: 科技大盘股池 + 最近 10 个自然日窗口 + 持有到最新收盘
-    uv run pullback_scan.py
+    uv run scripts/pullback_scan.py
 
     # 指定股票池
-    uv run pullback_scan.py --universe nasdaq_largecap
-    uv run pullback_scan.py --universe all_largecap
-    uv run pullback_scan.py --universe sectors            # 硬编码 SECTORS
+    uv run scripts/pullback_scan.py --universe nasdaq_largecap
+    uv run scripts/pullback_scan.py --universe all_largecap
+    uv run scripts/pullback_scan.py --universe sectors
 
     # 指定日期窗口
-    uv run pullback_scan.py --window 2026-03-27:2026-04-02
+    uv run scripts/pullback_scan.py --window 2026-03-27:2026-04-02
 
     # 指定持有天数和 EMA 级别
-    uv run pullback_scan.py --window 2026-03-27:2026-04-02 --hold 10 --ema 55,100
+    uv run scripts/pullback_scan.py --window 2026-03-27:2026-04-02 --hold 10 --ema 55,100
 
-    # 开启 MACD 多方过滤（过滤 DIF<=DEA 的假回踩）
-    uv run pullback_scan.py --window 2026-03-27:2026-04-02 --macd-filter
+    # 开启 MACD 多方过滤
+    uv run scripts/pullback_scan.py --window 2026-03-27:2026-04-02 --macd-filter
 
-    # 对照组: 关闭日线+周线多头趋势过滤，看纯触及事件
-    uv run pullback_scan.py --window 2026-03-27:2026-04-02 --no-trend-filter
+    # 关闭趋势过滤
+    uv run scripts/pullback_scan.py --window 2026-03-27:2026-04-02 --no-trend-filter
 """
 
 from __future__ import annotations
@@ -29,10 +29,10 @@ import argparse
 from datetime import datetime, timedelta
 
 import pandas as pd
-from longbridge.openapi import QuoteContext
 
-from lb_config import get_config
-from scanner import scan_universe
+from lb_config import get_client
+from longbridge_cli import LongbridgeCLI
+from technical.scanner import scan_universe
 from universe import (
     all_largecap_universe,
     nasdaq_largecap_universe,
@@ -44,12 +44,11 @@ UNIVERSES = {
     "tech_largecap": tech_largecap_universe,
     "nasdaq_largecap": nasdaq_largecap_universe,
     "all_largecap": all_largecap_universe,
-    "sectors": None,  # 不需要 ctx
+    "sectors": None,
 }
 
 
 def parse_window(text: str) -> tuple[str, str]:
-    """解析 '2026-03-27:2026-04-02' 形式的窗口。"""
     parts = text.split(":")
     if len(parts) != 2:
         raise argparse.ArgumentTypeError(
@@ -66,17 +65,16 @@ def parse_ema_levels(text: str) -> tuple[int, ...]:
 
 
 def default_window() -> tuple[str, str]:
-    """默认窗口 = 最近 10 个自然日。"""
     today = datetime.now()
     start = today - timedelta(days=10)
     return start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
 
 
-def load_universe(name: str, ctx: QuoteContext) -> list[str]:
+def load_universe(name: str, client: LongbridgeCLI) -> list[str]:
     if name == "sectors":
         return sectors_universe()
     fn = UNIVERSES[name]
-    return fn(ctx)
+    return fn(client)
 
 
 def print_report(df: pd.DataFrame, universe_name: str, window: tuple[str, str], hold_days: int | None) -> None:
@@ -102,7 +100,7 @@ def print_report(df: pd.DataFrame, universe_name: str, window: tuple[str, str], 
     print(f"  {'-'*97}")
 
     for _, r in df.iterrows():
-        flag = " ★" if r["return_pct"] is not None and r["return_pct"] > 15 else ""
+        flag = " \u2605" if r["return_pct"] is not None and r["return_pct"] > 15 else ""
         print(
             f"  {r['symbol']:<14} {r['ema_level']:>8} {r['touch_date']:>12} "
             f"{r['entry_price']:>10.2f} {r['exit_price']:>10.2f} "
@@ -198,17 +196,16 @@ def main() -> None:
 
     window = args.window if args.window else default_window()
 
-    config = get_config()
-    ctx = QuoteContext(config)
+    client = get_client()
 
     print(f"  股票池: {args.universe}")
-    symbols = load_universe(args.universe, ctx)
+    symbols = load_universe(args.universe, client)
     if args.limit:
         symbols = symbols[: args.limit]
     print(f"  股票数量: {len(symbols)}")
 
     df = scan_universe(
-        ctx,
+        client,
         symbols,
         window_start=window[0],
         window_end=window[1],

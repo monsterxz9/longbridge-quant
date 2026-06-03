@@ -1,11 +1,10 @@
 [project]
 name = "longbridge-quant"
 version = "0.1.0"
-description = "Add your description here"
+description = "基于 Longbridge CLI 的美股量化交易工具集"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "longbridge>=4.0.5",
     "pandas>=3.0.2",
     "pyarrow>=17.0.0",
 ]

@@ -1,19 +1,20 @@
 """板块分类 EMA + MACD 多周期扫描"""
 
 import pandas as pd
-from longbridge.openapi import QuoteContext
 
 from cache import fetch_daily_cached
-from ema_macd_strategy import get_config, calc_ema, calc_macd, detect_signals
+from lb_config import get_client
+from longbridge_cli import LongbridgeCLI
 from sectors_data import SECTORS
+from technical.indicators import calc_ema, calc_macd, detect_signals
 
 EMA_PERIODS = [21, 55, 100, 200]
 
 
-def quick_scan(ctx: QuoteContext, symbol: str) -> dict | None:
+def quick_scan(client: LongbridgeCLI, symbol: str) -> dict | None:
     """对单个标的做快速日线扫描，返回摘要 dict"""
     try:
-        daily = fetch_daily_cached(ctx, symbol, 250)
+        daily = fetch_daily_cached(client, symbol, 250)
     except Exception as e:
         return {"symbol": symbol, "error": str(e)}
 
@@ -27,7 +28,6 @@ def quick_scan(ctx: QuoteContext, symbol: str) -> dict | None:
     last = daily.iloc[-1]
     prev = daily.iloc[-2]
 
-    # EMA 排列判断
     if last["ema_bullish"]:
         ema_status = "多头"
     elif last["ema_bearish"]:
@@ -35,16 +35,10 @@ def quick_scan(ctx: QuoteContext, symbol: str) -> dict | None:
     else:
         ema_status = "交织"
 
-    # 价格在几条 EMA 之上
     above_count = sum(1 for p in EMA_PERIODS if last["close"] > last[f"ema{p}"])
-
-    # MACD 方向
     macd_side = "多" if last["macd_dif"] > last["macd_dea"] else "空"
-
-    # MACD 柱变化趋势
     hist_trend = "放大" if abs(last["macd_hist"]) > abs(prev["macd_hist"]) else "缩小"
 
-    # 最近信号
     signals = daily[daily["signal"] != ""].tail(1)
     last_signal = ""
     last_signal_date = ""
@@ -87,7 +81,7 @@ def print_sector(sector_name: str, results: list[dict]):
 
     for r in results:
         if "error" in r:
-            print(f"  {r['symbol']:<12} ❌ {r['error']}")
+            print(f"  {r['symbol']:<12} {r['error']}")
             continue
 
         sig_str = format_signal(r["last_signal"])
@@ -112,8 +106,7 @@ def sector_summary(results: list[dict]) -> dict:
 
 
 def main():
-    config = get_config()
-    ctx = QuoteContext(config)
+    client = get_client()
 
     cache = {}
     all_summaries = {}
@@ -123,14 +116,13 @@ def main():
         results = []
         for symbol in symbols:
             if symbol not in cache:
-                cache[symbol] = quick_scan(ctx, symbol)
+                cache[symbol] = quick_scan(client, symbol)
             results.append(cache[symbol])
 
         print_sector(sector_name, results)
         all_results[sector_name] = results
         all_summaries[sector_name] = sector_summary(results)
 
-    # 板块强弱总览 — 综合评分: EMA多头占比 * 0.5 + MACD多方占比 * 0.3 + 站上EMA均值 * 0.2
     for name, s in all_summaries.items():
         t = s["total"] or 1
         ema_score = s["ema_bullish"] / t
@@ -149,7 +141,7 @@ def main():
 
     for i, (name, s) in enumerate(ranked, 1):
         bar_len = int(s["score"] / 10)
-        bar = "█" * bar_len + "░" * (10 - bar_len)
+        bar = "\u2588" * bar_len + "\u2591" * (10 - bar_len)
         print(
             f"  {i:>4} {name:<14} {s['total']:>4} {s['ema_bullish']:>8} {s['ema_bearish']:>8} "
             f"{s['macd_bullish']:>7} {s['score']:>5.0f}  {bar}"

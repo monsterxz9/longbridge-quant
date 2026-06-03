@@ -1,34 +1,31 @@
-"""本地数据缓存层 —— 日K线与市值。
+"""本地数据缓存层 —— 日K线、市值与基本面。
 
 设计要点:
 - 每只股票的日 K 线存为一个 parquet 文件: .cache/daily/{symbol}.parquet
 - 过期就整段重拉（不做增量合并，保持代码简单正确）
 - 通过 LB_CACHE_MAX_AGE_HOURS 环境变量可全局调整过期时间
 - 市值快照存为单个 parquet: .cache/large_caps.parquet，每日刷新一次
+- 数据入口使用 Longbridge CLI 的 JSON 输出，不依赖 Python SDK
 """
 
 from __future__ import annotations
 
 import json
+import math
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
-from longbridge.openapi import (
-    AdjustType,
-    CalcIndex,
-    Market,
-    Period,
-    QuoteContext,
-    SecurityListCategory,
-)
 
 from lb_config import CACHE_DIR, CACHE_MAX_AGE_HOURS, LARGE_CAP_THRESHOLD
+from longbridge_cli import LongbridgeCLI
 
 DAILY_DIR = CACHE_DIR / "daily"
 LARGE_CAPS_FILE = CACHE_DIR / "large_caps.parquet"
 LARGE_CAPS_META = CACHE_DIR / "large_caps.meta.json"
+FUNDAMENTALS_FILE = CACHE_DIR / "fundamentals.parquet"
+FUNDAMENTALS_META = CACHE_DIR / "fundamentals.meta.json"
 
 
 def _meta_path(symbol: str) -> Path:
@@ -58,8 +55,19 @@ def _write_meta(meta_file: Path, extra: dict | None = None) -> None:
     meta_file.write_text(json.dumps(payload, ensure_ascii=False))
 
 
+def _safe_float(val) -> float:
+    """将 CLI 返回的字符串/数字安全转为 float，None/NaN → NaN。"""
+    if val is None or val == "":
+        return float("nan")
+    try:
+        f = float(val)
+    except (TypeError, ValueError):
+        return float("nan")
+    return f if math.isfinite(f) else float("nan")
+
+
 def fetch_daily_cached(
-    ctx: QuoteContext,
+    client: LongbridgeCLI,
     symbol: str,
     count: int = 300,
     max_age_hours: float | None = None,
@@ -80,24 +88,10 @@ def fetch_daily_cached(
         if len(df) >= count:
             return df.tail(count).reset_index(drop=True)
 
-    # 过期或不存在或不够 → 重新拉取
-    candles = ctx.candlesticks(symbol, Period.Day, count, AdjustType.ForwardAdjust)
-    rows = [
-        {
-            "date": c.timestamp,
-            "open": float(c.open),
-            "high": float(c.high),
-            "low": float(c.low),
-            "close": float(c.close),
-            "volume": int(c.volume),
-        }
-        for c in candles
-    ]
-    df = pd.DataFrame(rows)
+    # 过期或不存在或不够 → 重新通过 CLI 拉取
+    df = client.daily_candles(symbol, count=count)
     if df.empty:
         return df
-    df["date"] = pd.to_datetime(df["date"])
-    df = df.sort_values("date").reset_index(drop=True)
 
     df.to_parquet(data_file, index=False)
     _write_meta(meta_file, {"count": len(df)})
@@ -105,7 +99,7 @@ def fetch_daily_cached(
 
 
 def fetch_daily_batch(
-    ctx: QuoteContext,
+    client: LongbridgeCLI,
     symbols: list[str],
     count: int = 300,
     max_age_hours: float | None = None,
@@ -132,7 +126,7 @@ def fetch_daily_batch(
             data_file.exists() and _is_fresh(meta_file, max_age_hours)
         )
         try:
-            df = fetch_daily_cached(ctx, sym, count, max_age_hours)
+            df = fetch_daily_cached(client, sym, count, max_age_hours)
             if df.empty:
                 errors += 1
                 continue
@@ -160,7 +154,7 @@ def fetch_daily_batch(
 
 
 def get_large_caps_cached(
-    ctx: QuoteContext,
+    client: LongbridgeCLI,
     threshold: float = LARGE_CAP_THRESHOLD,
     max_age_hours: float = 24.0,
     force: bool = False,
@@ -178,26 +172,26 @@ def get_large_caps_cached(
 
     print(f"  [large_caps] 刷新全美股市值快照（阈值 ${threshold/1e9:.0f}B）...")
     # 拉全部美股列表
-    all_us = ctx.security_list(Market.US, SecurityListCategory.Overnight)
-    symbols = [s.symbol for s in all_us]
+    all_us = client.security_list("US")
+    symbols = [str(s["symbol"]) for s in all_us if s.get("symbol")]
     print(f"  [large_caps] 全美股数量: {len(symbols)}")
 
     # 批量拉市值
     rows: list[dict] = []
     batch_size = 500
-    indexes = [CalcIndex.TotalMarketValue, CalcIndex.LastDone]
+    indexes = ("mktcap", "last_done")
     for i in range(0, len(symbols), batch_size):
         batch = symbols[i : i + batch_size]
         try:
-            results = ctx.calc_indexes(batch, indexes)
+            results = client.calc_indexes(batch, indexes)
             for r in results:
-                mv = float(r.total_market_value) if r.total_market_value else 0.0
+                mv = _safe_float(r.get("mktcap"))
                 if mv >= threshold:
                     rows.append(
                         {
-                            "symbol": r.symbol,
+                            "symbol": r.get("symbol"),
                             "market_value": mv,
-                            "last_done": float(r.last_done) if r.last_done else 0.0,
+                            "last_done": _safe_float(r.get("last_done")),
                         }
                     )
         except Exception as e:
@@ -211,9 +205,9 @@ def get_large_caps_cached(
     for i in range(0, len(syms), batch_size):
         batch = syms[i : i + batch_size]
         try:
-            infos = ctx.static_info(batch)
+            infos = client.static_info(batch)
             for info in infos:
-                exch_map[info.symbol] = info.exchange or ""
+                exch_map[str(info.get("symbol"))] = str(info.get("exchange") or "")
         except Exception as e:
             print(f"  [large_caps] static_info 批次 {i} 出错: {e}")
         time.sleep(0.2)
@@ -227,4 +221,50 @@ def get_large_caps_cached(
     df.to_parquet(LARGE_CAPS_FILE, index=False)
     _write_meta(LARGE_CAPS_META, {"total": len(df), "threshold": threshold})
     print(f"  [large_caps] 缓存写入: {LARGE_CAPS_FILE} ({len(df)} 只)")
+    return df
+
+
+def fetch_fundamentals_cached(
+    client: LongbridgeCLI,
+    symbols: list[str],
+    max_age_hours: float = 24.0,
+    force: bool = False,
+) -> pd.DataFrame:
+    """批量获取基本面指标，24 小时缓存。
+
+    返回 DataFrame 列: symbol, pe_ttm, pb, dividend_yield, turnover_rate,
+    volume_ratio, amplitude, capital_flow, ytd_return, half_year_return,
+    five_day_return, ten_day_return, market_cap, last_done
+    """
+    if not force and FUNDAMENTALS_FILE.exists() and _is_fresh(
+        FUNDAMENTALS_META, max_age_hours
+    ):
+        df = pd.read_parquet(FUNDAMENTALS_FILE)
+        # 只返回请求的 symbols 中有缓存的部分
+        cached_syms = set(df["symbol"].tolist())
+        requested = set(symbols)
+        if requested.issubset(cached_syms):
+            return df[df["symbol"].isin(requested)].reset_index(drop=True)
+
+    print(f"  [fundamentals] 批量获取 {len(symbols)} 只股票的基本面数据...")
+    batch_size = 500
+    rows: list[dict] = []
+
+    for i in range(0, len(symbols), batch_size):
+        batch = symbols[i : i + batch_size]
+        try:
+            df_batch = client.fundamental_indexes(batch)
+            rows.extend(df_batch.to_dict("records"))
+        except Exception as e:
+            print(f"  [fundamentals] 批次 {i} 出错: {e}")
+        time.sleep(0.3)
+
+    if not rows:
+        print("  [fundamentals] 未获取到任何数据")
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+    df.to_parquet(FUNDAMENTALS_FILE, index=False)
+    _write_meta(FUNDAMENTALS_META, {"total": len(df)})
+    print(f"  [fundamentals] 缓存写入: {FUNDAMENTALS_FILE} ({len(df)} 只)")
     return df
