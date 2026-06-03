@@ -1,95 +1,102 @@
 # longbridge-quant
 
-基于 [长桥 OpenAPI SDK](https://github.com/longbridge/openapi) 的量化交易工具集。
+基于 Longbridge CLI 的美股数据适配与基本面筛选底座。
+
+当前定位不是自动交易系统，也不把纯技术指标作为买卖建议。项目保留少量
+EMA/MACD 逻辑作为实验性辅助，主要价值在于拉取/缓存长桥数据、构建股票池、
+做基本面筛选，并为后续的持仓体检或候选股研究日报提供底座。
 
 ## 环境
 
 - Python 3.14 + uv
-- 依赖: `longbridge`, `pandas`
+- 系统工具: `longbridge` CLI
+- Python 依赖: `pandas`, `pyarrow`
 
 ## 认证
 
-使用 OAuth 2.0 认证。`client_id` 默认内置在 `lb_config.py`，首次运行会弹出浏览器授权，token 缓存在 `~/.longbridge/openapi/tokens/`。
-
-如需使用自己的 `client_id`，可以通过环境变量 `LB_CLIENT_ID` 覆盖：
+认证由 Longbridge CLI 管理。首次使用前运行：
 
 ```bash
-export LB_CLIENT_ID=your-longbridge-oauth-client-id
+longbridge auth login
+longbridge check --format json
 ```
 
-或者把仓库根目录下的 `.env.example` 复制为 `.env` 后填入值（需要搭配 `direnv` / `dotenv-cli` 等工具加载，项目本身不依赖 `python-dotenv`）。
+token 缓存在 `~/.longbridge/openapi/tokens/`。项目里的 Python 代码只调用
+`longbridge ... --format json`，不直接持有 `client_id`，也不依赖 Python SDK。
 
-如需重新注册 client:
+## 项目结构
+
+```
+longbridge_cli.py  # Longbridge CLI JSON adapter
+lb_config.py / cache.py / universe.py / sectors_data.py   # 共享基础设施
+fundamental/     # 基本面分析 (估值/资金流/多周期动量/筛选)
+technical/       # 实验性技术辅助 (EMA/MACD/回踩扫描)
+scripts/         # CLI 入口
+```
+
+## 运行方式
+
+所有脚本以模块模式运行：
 
 ```bash
-curl -X POST https://openapi.longbridge.com/oauth2/register \
-  -H "Content-Type: application/json" \
-  -d '{
-    "app_key": "YOUR_APP_KEY",
-    "app_secret": "YOUR_APP_SECRET",
-    "client_name": "longbridge-quant",
-    "redirect_uris": ["http://localhost:60355/callback"],
-    "grant_types": ["authorization_code", "refresh_token"]
-  }'
+uv run python -m scripts.<script_name> [args...]
 ```
 
-## 脚本说明
+## 核心功能
 
-### `get_quote.py` — 基础行情
+### 1. 基本面筛选 — `scripts/fundamental_scan.py`
 
-获取实时行情、标的基本信息、历史日 K 线。入门验证 SDK 连通性。
+一次 `longbridge calc-index ... --format json` 批量拉取 PE/PB/股息率/资金流/多周期动量等 13 个指标，按条件筛选。
 
 ```bash
-uv run get_quote.py
+# 低 PE 筛选（自动排除亏损）
+uv run python -m scripts.fundamental_scan --universe tech_largecap --pe-max 25 --sort pe_ttm
+
+# 高股息
+uv run python -m scripts.fundamental_scan --universe all_largecap --dividend-min 3.0
+
+# 资金流入 + YTD 领涨
+uv run python -m scripts.fundamental_scan --universe tech_largecap \
+    --capital-flow-positive --sort ytd_return --desc
+
+# 单股详情 (含日内资金流和大小单分布)
+uv run python -m scripts.fundamental_scan --symbol AAPL.US --detail
 ```
 
-### `ema_macd_strategy.py` — EMA + MACD 策略分析
+### 2. 实验性 EMA 回踩扫描 — `scripts/pullback_scan.py`
 
-对单个标的做日线 + 周线的技术分析:
-
-- **EMA**: 21 / 55 / 100 / 200 日均线，判断多头/空头/交织排列
-- **MACD**: DIF / DEA / 柱状图，检测金叉/死叉
-- **综合信号**: EMA 多头排列 + MACD 金叉 = BUY，EMA 空头排列 + MACD 死叉 = SELL
+日线+周线均为 EMA 多头排列前提下，扫描日内低点回踩 EMA 的股票并做持仓回测。
+这只适合做辅助观察，不应单独当成交易信号。
 
 ```bash
-uv run ema_macd_strategy.py
+# 默认: 科技大盘股池 + 最近 10 个自然日窗口 + 持有到最新收盘
+uv run python -m scripts.pullback_scan
+
+# 指定股票池和日期窗口
+uv run python -m scripts.pullback_scan --universe nasdaq_largecap --window 2026-03-27:2026-04-02
+
+# 指定 EMA 级别 + 持有天数 + MACD 过滤
+uv run python -m scripts.pullback_scan --window 2026-03-27:2026-04-02 --hold 10 --ema 55,100 --macd-filter
+
+# 关闭趋势过滤做对照
+uv run python -m scripts.pullback_scan --window 2026-03-27:2026-04-02 --no-trend-filter
 ```
 
-可直接 import 使用:
+### 3. 实验性技术 + 基本面组合扫描 — `scripts/combo_scan.py`
 
-```python
-from ema_macd_strategy import get_config, analyze
-from longbridge.openapi import QuoteContext
-
-config = get_config()
-ctx = QuoteContext(config)
-analyze(ctx, "AAPL.US")
-```
-
-### `sector_analysis.py` — 板块分类扫描
-
-对美股 20 个细分板块做批量扫描，输出每只标的的 EMA/MACD 状态，并按综合评分排名。
-
-覆盖板块:
-- 指数 ETF / 消费电子 / 互联网广告 / 流媒体 / 电商云
-- 企业软件 / AI 基础设施 / AI 应用 / 存储内存 / 传统半导体
-- 网络安全 / 网络通信 / 金融 / 支付 Fintech / 医疗保健
-- 消费 / 能源 / 工业 / 公用防御 / 地产 REITs
-
-评分公式: `EMA多头占比 * 50% + MACD多方占比 * 30% + 价格位置 * 20%`
+管道式组合：universe → 基本面筛选 → EMA 回踩扫描 → 合并排序。
+这个入口仍然保留，但定位是研究候选排序实验，不是买卖建议。
 
 ```bash
-uv run sector_analysis.py
-```
+# 低估值 + 资金流入 + EMA 回踩
+uv run python -m scripts.combo_scan --universe tech_largecap \
+    --pe-max 30 --capital-flow-positive \
+    --window 2026-04-01:2026-04-10 --ema 55,100
 
-编辑文件顶部的 `SECTORS` 字典可自定义板块和标的。
-
-### `extended_hours.py` — 盘前/盘后/夜盘行情
-
-查看美股盘前 (pre-market)、盘后 (post-market)、夜盘 (overnight) 实时报价。
-
-```bash
-uv run extended_hours.py
+# 价值 + 高股息 + 回踩
+uv run python -m scripts.combo_scan --universe all_largecap \
+    --pe-max 15 --dividend-min 2.0 \
+    --window 2026-04-01:2026-04-10
 ```
 
 ## 数据权限
@@ -99,3 +106,7 @@ uv run extended_hours.py
 - HK: LV1 Real-time Quotes
 - CN: LV1 Real-time Quotes
 - USOption: 未开通
+
+## 缓存
+
+本地 parquet 缓存在 `.cache/`（已加入 `.gitignore`）。可通过 `LB_CACHE_MAX_AGE_HOURS` 覆盖过期时间，`rm -rf .cache/` 强制刷新。
